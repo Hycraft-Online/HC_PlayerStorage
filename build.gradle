@@ -1,0 +1,76 @@
+plugins {
+   id 'java'
+}
+
+version = project.version
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(java_version)
+    withSourcesJar()
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Path to HytaleServer.jar
+    def localServerJar = file("${rootProject.projectDir}/../../server-files/Server/HytaleServer.jar")
+    def serverJarPath = localServerJar.exists()
+        ? localServerJar.absolutePath
+        : "$hytaleHome/$patchline/package/game/$game_build/Server/HytaleServer.jar"
+    implementation(files(serverJarPath))
+
+    // Mixin dependencies (compileOnly - Hyxin provides these at runtime)
+    compileOnly "org.ow2.asm:asm:${project.asm_version}"
+    compileOnly "org.ow2.asm:asm-tree:${project.asm_version}"
+    compileOnly "net.fabricmc:sponge-mixin:${project.mixin_version}"
+    compileOnly "io.github.llamalad7:mixinextras-fabric:${project.mixin_extras_version}"
+
+    // PostgreSQL driver (compileOnly - available at runtime from other plugins)
+    compileOnly 'org.postgresql:postgresql:42.7.2'
+}
+
+processResources {
+    var expandProps = [
+        'name'          : project.name,
+        'version'       : project.version,
+        'group'         : project.group,
+        'description'   : mod_description,
+        'server_version': server_version,
+        'entry_point'   : entry_point
+    ]
+
+    filesMatching(['manifest.json']) {
+        expand expandProps
+    }
+    inputs.properties(expandProps)
+}
+
+jar {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+task deploy(dependsOn: 'build') {
+    doLast {
+        def jarFile = file("${buildDir}/libs/${project.name}-${project.version}.jar")
+        def containerName = "hytale"
+        def containerEarlyPlugins = "/home/hytale/server-files/earlyplugins"
+
+        // Check if container is running
+        def containerRunning = "docker ps --format {{.Names}}".execute().text.contains(containerName)
+
+        if (containerRunning) {
+            // Deploy via docker
+            ['docker', 'exec', containerName, 'mkdir', '-p', containerEarlyPlugins].execute().waitFor()
+            ['docker', 'cp', jarFile.absolutePath, "${containerName}:${containerEarlyPlugins}/"].execute().waitFor()
+            println "Deployed ${jarFile.name} to container ${containerName}:${containerEarlyPlugins}"
+        } else {
+            // Fallback to local deploy (requires sudo)
+            def earlyPluginsDir = file("${rootProject.projectDir}/../../server-files/earlyplugins")
+            println "Container not running. Deploy manually with:"
+            println "  sudo mkdir -p ${earlyPluginsDir}"
+            println "  sudo cp ${jarFile.absolutePath} ${earlyPluginsDir}/"
+        }
+    }
+}
