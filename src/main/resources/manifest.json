@@ -8,6 +8,7 @@
   "Dependencies": {},
   "OptionalDependencies": {},
   "DisabledByDefault": false,
+  "Main": "${entry_point}",
   "Hyxin": {
     "Configs": ["hcplayerstorage.mixins.json"]
   }
