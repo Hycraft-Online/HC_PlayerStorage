@@ -16,6 +16,7 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.Driver;
@@ -39,6 +40,33 @@ public class DiskPlayerStorageMixin {
     private static final String JDBC_PASS = "factionwars_secret";
     private static volatile boolean initialized = false;
     private static volatile Driver pgDriver;
+
+    // ─── Multi-Character UUID Translation ───
+
+    /**
+     * Resolve the active character UUID for an account UUID.
+     * Returns the account UUID itself if multi-char tables don't exist or no entry found.
+     * No caching — called once per load/save which already do DB queries.
+     */
+    private static UUID resolveCharacterUuid(UUID accountUuid) {
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement(
+                 "SELECT c.character_uuid FROM mc_active_character a " +
+                 "JOIN mc_characters c ON c.account_uuid = a.account_uuid AND c.slot = a.active_slot " +
+                 "WHERE a.account_uuid = ? AND c.deleted = FALSE")) {
+            stmt.setObject(1, accountUuid);
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) {
+                UUID charUuid = rs.getObject(1, UUID.class);
+                LOGGER.info("Resolved character UUID for " + accountUuid + " -> " + charUuid);
+                return charUuid;
+            }
+            LOGGER.warning("No character found for account " + accountUuid + ", using account UUID as fallback");
+        } catch (Exception e) {
+            LOGGER.warning("Character UUID lookup failed for " + accountUuid + ": " + e.getMessage());
+        }
+        return accountUuid; // Fallback: use account UUID directly
+    }
 
     private static final String DRIVER_JAR = "/home/hytale/server-files/mods/HC_PlayerInventory-1.0.0.jar";
 
@@ -116,18 +144,20 @@ public class DiskPlayerStorageMixin {
 
     /**
      * @author HC_PlayerStorage
-     * @reason Replace disk-based player loading with PostgreSQL
+     * @reason Replace disk-based player loading with PostgreSQL + multi-character UUID translation
      */
     @Overwrite
     @Nonnull
     public CompletableFuture<Holder<EntityStore>> load(@Nonnull UUID uuid) {
         return CompletableFuture.supplyAsync(() -> {
+            // Translate account UUID to active character UUID
+            UUID characterUuid = resolveCharacterUuid(uuid);
             try {
                 String json = null;
                 try (Connection conn = getConnection();
                      PreparedStatement stmt = conn.prepareStatement(
                          "SELECT data::text FROM player_data WHERE uuid = ?")) {
-                    stmt.setObject(1, uuid);
+                    stmt.setObject(1, characterUuid);
                     ResultSet rs = stmt.executeQuery();
                     if (rs.next()) {
                         json = rs.getString(1);
@@ -136,7 +166,7 @@ public class DiskPlayerStorageMixin {
                 BsonDocument doc = (json != null) ? BsonDocument.parse(json) : new BsonDocument();
                 return EntityStore.REGISTRY.deserialize(doc);
             } catch (Exception e) {
-                LOGGER.log(Level.SEVERE, "Failed to load player " + uuid + " from DB, returning empty", e);
+                LOGGER.log(Level.SEVERE, "Failed to load player " + uuid + " (char=" + characterUuid + ") from DB, returning empty", e);
                 return EntityStore.REGISTRY.deserialize(new BsonDocument());
             }
         });
@@ -144,12 +174,14 @@ public class DiskPlayerStorageMixin {
 
     /**
      * @author HC_PlayerStorage
-     * @reason Replace disk-based player saving with PostgreSQL
+     * @reason Replace disk-based player saving with PostgreSQL + multi-character UUID translation
      */
     @Overwrite
     @Nonnull
     public CompletableFuture<Void> save(@Nonnull UUID uuid, @Nonnull Holder<EntityStore> holder) {
         return CompletableFuture.runAsync(() -> {
+            // Translate account UUID to active character UUID
+            UUID characterUuid = resolveCharacterUuid(uuid);
             try {
                 BsonDocument doc = EntityStore.REGISTRY.serialize(holder);
                 String json = BsonUtil.toJson(doc);
@@ -157,12 +189,12 @@ public class DiskPlayerStorageMixin {
                      PreparedStatement stmt = conn.prepareStatement(
                          "INSERT INTO player_data (uuid, data, updated_at) VALUES (?, ?::jsonb, NOW()) " +
                          "ON CONFLICT (uuid) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()")) {
-                    stmt.setObject(1, uuid);
+                    stmt.setObject(1, characterUuid);
                     stmt.setString(2, json);
                     stmt.executeUpdate();
                 }
             } catch (Exception e) {
-                LOGGER.log(Level.SEVERE, "Failed to save player " + uuid + " to DB", e);
+                LOGGER.log(Level.SEVERE, "Failed to save player " + uuid + " (char=" + characterUuid + ") to DB", e);
             }
         });
     }
