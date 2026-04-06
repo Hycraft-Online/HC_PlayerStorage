@@ -55,11 +55,12 @@ public class DiskPlayerStorageMixin {
                  "JOIN mc_characters c ON c.account_uuid = a.account_uuid AND c.slot = a.active_slot " +
                  "WHERE a.account_uuid = ? AND c.deleted = FALSE")) {
             stmt.setObject(1, accountUuid);
-            ResultSet rs = stmt.executeQuery();
-            if (rs.next()) {
-                UUID charUuid = rs.getObject(1, UUID.class);
-                LOGGER.info("Resolved character UUID for " + accountUuid + " -> " + charUuid);
-                return charUuid;
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    UUID charUuid = rs.getObject(1, UUID.class);
+                    LOGGER.info("Resolved character UUID for " + accountUuid + " -> " + charUuid);
+                    return charUuid;
+                }
             }
             LOGGER.warning("No character found for account " + accountUuid + ", using account UUID as fallback");
         } catch (Exception e) {
@@ -158,9 +159,10 @@ public class DiskPlayerStorageMixin {
                      PreparedStatement stmt = conn.prepareStatement(
                          "SELECT data::text FROM player_data WHERE uuid = ?")) {
                     stmt.setObject(1, characterUuid);
-                    ResultSet rs = stmt.executeQuery();
-                    if (rs.next()) {
-                        json = rs.getString(1);
+                    try (ResultSet rs = stmt.executeQuery()) {
+                        if (rs.next()) {
+                            json = rs.getString(1);
+                        }
                     }
                 }
                 BsonDocument doc = (json != null) ? BsonDocument.parse(json) : new BsonDocument();
@@ -228,9 +230,10 @@ public class DiskPlayerStorageMixin {
         Set<UUID> uuids = new HashSet<>();
         try (Connection conn = getConnection();
              PreparedStatement stmt = conn.prepareStatement("SELECT uuid FROM player_data")) {
-            ResultSet rs = stmt.executeQuery();
-            while (rs.next()) {
-                uuids.add(rs.getObject(1, UUID.class));
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    uuids.add(rs.getObject(1, UUID.class));
+                }
             }
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "Failed to get players from DB", e);
